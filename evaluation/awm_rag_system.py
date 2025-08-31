@@ -51,7 +51,7 @@ class ProductionRAGSystem:
                 # Test OpenAI connectivity
                 test_response = client.embeddings.create(
                     input="test",
-                    model="text-embedding-ada-002"
+                    model="ttext-embedding-3-small"
                 )
                 self.embedding_model = None
                 self.embedding_dim = 1536
@@ -89,7 +89,7 @@ class ProductionRAGSystem:
             try:
                 response = client.embeddings.create(
                     input=text[:8000],  # Limit text length
-                    model="text-embedding-ada-002"
+                    model="text-embedding-3-small"
                 )
                 return np.array(response.data[0].embedding)
             except Exception as e:
@@ -102,7 +102,7 @@ class ProductionRAGSystem:
             if self.embedding_model and self.embedding_model != "keyword_fallback":
                 return self.embedding_model.encode(text)
             else:
-                return self._get_embedding(text)  # Use fallback
+                return self._get_keyword_fallback(text)
     
     def _load_embeddings_cache(self) -> Dict[str, np.ndarray]:
         """Load cached embeddings with error handling"""

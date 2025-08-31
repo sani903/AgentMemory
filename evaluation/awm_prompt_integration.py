@@ -5,10 +5,15 @@ This provides functions to integrate AWM workflows into agent prompts
 
 import os
 from typing import Optional
-from awm_memory import awm_memory
+try:
+    from awm_memory import awm_memory
+    MEMORY_AVAILABLE = True
+except ImportError:
+    MEMORY_AVAILABLE = False
 
 def get_relevant_workflows_for_task(task_instruction: str, use_rag: bool = True, top_k: int = 3) -> str:
-    """Get relevant workflows that can be included in agent prompts"""
+    if not MEMORY_AVAILABLE:
+        return ""
     return awm_memory.get_relevant_workflows(task_instruction, use_rag=use_rag, top_k=top_k)
 
 def augment_agent_prompt_with_workflows(base_prompt: str, task_instruction: str, 
