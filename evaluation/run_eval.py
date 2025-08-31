@@ -26,7 +26,21 @@ from openhands.runtime.base import Runtime
 from openhands.utils.async_utils import call_async_from_sync
 
 from browsing import pre_login
+import sys
+import traceback
+try:
+    from awm_memory import awm_memory
+    AWM_MEMORY_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: AWM memory system not available: {e}")
+    AWM_MEMORY_AVAILABLE = False
 
+try:
+    from awm_prompt_integration import augment_agent_prompt_with_workflows
+    AWM_PROMPT_AVAILABLE = True
+except ImportError as e:
+    print(f"Warning: AWM prompt integration not available: {e}")
+    AWM_PROMPT_AVAILABLE = False
 
 def get_config(
     base_container_image: str,
@@ -126,10 +140,41 @@ def codeact_user_response(state: State) -> str:
 def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, dependencies: List[str],
                save_final_state: bool, state_dir: str,
                save_screenshots: bool, screenshots_dir: str) -> State:
+    
+    # Get task instruction - read from the task container
+    task_instruction = ""
+    try:
+        action = CmdRunAction(command="cat /instruction/task.md")
+        obs = runtime.run_action(action)
+        if obs.exit_code == 0:
+            task_instruction = obs.content.strip()
+            logger.info(f"Task instruction loaded: {task_instruction[:100]}...")
+    except Exception as e:
+        logger.warning(f"Could not read task instruction: {e}")
+        task_instruction = f"Complete the task in {task_name}"
+
     instruction = "Complete the task in /instruction/task.md"
 
     if 'gitlab' in dependencies:
         instruction += "\n\nGitlab username is 'root' and password is 'theagentcompany'"
+
+    # AWM RAG Integration: Augment instruction with relevant workflows
+    if AWM_PROMPT_AVAILABLE:
+        try:
+            enhanced_instruction = augment_agent_prompt_with_workflows(
+                base_prompt=instruction,
+                task_instruction=task_instruction,
+                use_rag=True,
+                top_k=3
+            )
+            if enhanced_instruction != instruction:
+                instruction = enhanced_instruction
+                logger.info("Enhanced instruction with RAG-retrieved workflows")
+            else:
+                logger.info("No relevant workflows found for this task")
+        except Exception as e:
+            logger.warning(f"Could not enhance instruction with workflows: {e}")
+            logger.debug(f"AWM enhancement error traceback: {traceback.format_exc()}")
 
     state: State | None = asyncio.run(
         run_controller(
@@ -140,26 +185,99 @@ def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, depend
             fake_user_response_fn=codeact_user_response,
         )
     )
-    logger.info(state)
+    
+    logger.info(f"Task completed with state: {state.agent_state if state else 'None'}")
 
     if save_screenshots:
         screenshots_dir = os.path.join(screenshots_dir, task_name)
         os.makedirs(screenshots_dir, exist_ok=True)
+        screenshot_count = 0
         for image_id, obs in enumerate(state.history):
             if isinstance(obs, BrowserOutputObservation):
-                image_data = base64.b64decode(
-                    obs.screenshot.replace('data:image/png;base64,', '')
-                )
-                with open(os.path.join(screenshots_dir, f'{image_id}.png'), 'wb') as file:
-                    file.write(image_data)
+                try:
+                    image_data = base64.b64decode(
+                        obs.screenshot.replace('data:image/png;base64,', '')
+                    )
+                    with open(os.path.join(screenshots_dir, f'{image_id}.png'), 'wb') as file:
+                        file.write(image_data)
+                    screenshot_count += 1
+                except Exception as e:
+                    logger.warning(f"Could not save screenshot {image_id}: {e}")
+        logger.info(f"Saved {screenshot_count} screenshots")
 
     if save_final_state:
         os.makedirs(state_dir, exist_ok=True)
-        with open(os.path.join(state_dir, f'state_{task_name}.json'), 'w') as file:
-            json.dump(str(state), file, indent=4)
+        try:
+            with open(os.path.join(state_dir, f'state_{task_name}.json'), 'w') as file:
+                # Convert state to string for JSON serialization
+                json.dump(str(state), file, indent=4)
+        except Exception as e:
+            logger.warning(f"Could not save final state: {e}")
+
+    # AWM Memory Integration: Convert trajectory to memory after completion
+    if AWM_MEMORY_AVAILABLE and state:
+        try:
+            # Determine task success from state
+            task_success = (state.agent_state and 
+                          str(state.agent_state) == 'AgentState.FINISHED')
+            
+            # Add trajectory to AWM memory
+            memory_added = awm_memory.add_trajectory_to_memory(
+                task_instruction=task_instruction,
+                state_obj=state,
+                task_name=task_name,
+                dependencies=dependencies,
+                force_success=False  # Only store successful trajectories
+            )
+            
+            if memory_added:
+                logger.info(f"Added successful trajectory to AWM memory: {task_name}")
+                
+                # Try to induce workflows if we have enough memories
+                try:
+                    workflows_generated = awm_memory.induce_workflows_from_memories(
+                        min_memories=3, max_examples=8
+                    )
+                    if workflows_generated:
+                        logger.info("Generated new workflows from accumulated memories")
+                        
+                        # Optional: trigger RAG system refresh
+                        try:
+                            from awm_rag_system import rag_system
+                            if rag_system:
+                                rag_system._load_workflows()  # Refresh workflows
+                        except:
+                            pass  # RAG refresh is optional
+                            
+                except Exception as e:
+                    logger.warning(f"Workflow induction failed: {e}")
+                
+                # Cleanup old memories periodically
+                try:
+                    awm_memory.cleanup_old_memories(max_memories=50)
+                except Exception as e:
+                    logger.warning(f"Memory cleanup failed: {e}")
+            else:
+                if task_success:
+                    logger.info(f"Trajectory not added to memory (may be duplicate): {task_name}")
+                else:
+                    logger.info(f"Task failed, not adding to memory: {task_name}")
+            
+            # Print memory statistics
+            try:
+                stats = awm_memory.get_memory_stats()
+                logger.info(f"AWM Memory Stats: {stats}")
+            except Exception as e:
+                logger.warning(f"Could not get memory stats: {e}")
+                
+        except Exception as e:
+            logger.error(f"Error processing trajectory for AWM memory: {e}")
+            logger.debug(f"AWM memory error traceback: {traceback.format_exc()}")
+    
+    elif not AWM_MEMORY_AVAILABLE:
+        logger.info("AWM memory system not available - skipping trajectory storage")
 
     return state
-
 
 def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: str, result_path: str):
     command = (
@@ -175,6 +293,31 @@ def run_evaluator(runtime: Runtime, env_llm_config: LLMConfig, trajectory_path: 
     obs = runtime.run_action(action)
     logger.info(obs, extra={'msg_type': 'OBSERVATION'})
     assert obs.exit_code == 0
+
+def debug_awm_system():
+    """Debug function to check AWM system status"""
+    print("\n=== AWM System Debug Info ===")
+    print(f"AWM Memory Available: {AWM_MEMORY_AVAILABLE}")
+    print(f"AWM Prompt Available: {AWM_PROMPT_AVAILABLE}")
+    
+    if AWM_MEMORY_AVAILABLE:
+        try:
+            stats = awm_memory.get_memory_stats()
+            print(f"Memory Stats: {stats}")
+        except Exception as e:
+            print(f"Memory stats error: {e}")
+    
+    try:
+        from awm_rag_system import rag_system
+        if rag_system:
+            status = rag_system.get_system_status()
+            print(f"RAG System Status: {status}")
+        else:
+            print("RAG system not initialized")
+    except Exception as e:
+        print(f"RAG system check failed: {e}")
+    
+    print("============================\n")
 
 
 if __name__ == '__main__':
@@ -216,8 +359,14 @@ if __name__ == '__main__':
         default=False,
         help='Just build an OpenHands runtime image for the given task and then exit',
     )
+    parser.add_argument(
+        '--debug-awm',
+        action='store_true',
+        help='Show AWM system debug information'
+    )
     args, _ = parser.parse_known_args()
-
+    if args.debug_awm:
+        debug_awm_system()
     if not args.task_image_name or not args.task_image_name.strip():
         raise ValueError(f'Task image name is invalid!')
     task_short_name = args.task_image_name.split('/')[-1].split(':')[0]
