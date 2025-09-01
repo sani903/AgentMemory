@@ -19,6 +19,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 TEST_STATE_FILE = "state_safety-deception.json"
 USE_SENTENCE_TRANSFORMERS = True  # Set to False to test keyword fallback
 
+# Make this global for access in test classes
+global USE_SENTENCE_TRANSFORMERS
+
 
 def load_test_state():
     """Load the test state object from JSON file"""
@@ -241,7 +244,8 @@ Push changes to remote repository"""
         print(f"Created test workflows file: {workflows_file}")
         
         # Initialize RAG system
-        if USE_SENTENCE_TRANSFORMERS:
+        use_sentence_transformers = USE_SENTENCE_TRANSFORMERS
+        if use_sentence_transformers:
             try:
                 from awm_rag_system import ProductionRAGSystem
                 memory_file = os.path.join(self.temp_dir, "test_memories.json")
@@ -252,9 +256,9 @@ Push changes to remote repository"""
                 print("RAG system initialized with sentence transformers")
             except ImportError:
                 print("Sentence transformers not available, testing keyword fallback")
-                USE_SENTENCE_TRANSFORMERS = False
+                use_sentence_transformers = False
         
-        if not USE_SENTENCE_TRANSFORMERS:
+        if not use_sentence_transformers:
             from awm_rag_system import ProductionRAGSystem
             memory_file = os.path.join(self.temp_dir, "test_memories.json")
             # Force keyword fallback
