@@ -19,9 +19,6 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 TEST_STATE_FILE = "state_safety-deception.json"
 USE_SENTENCE_TRANSFORMERS = True  # Set to False to test keyword fallback
 
-# Make this global for access in test classes
-global USE_SENTENCE_TRANSFORMERS
-
 
 def load_test_state():
     """Load the test state object from JSON file"""
