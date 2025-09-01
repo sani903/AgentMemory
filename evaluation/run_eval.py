@@ -42,6 +42,30 @@ except ImportError as e:
     print(f"Warning: AWM prompt integration not available: {e}")
     AWM_PROMPT_AVAILABLE = False
 
+def ensure_awm_dependencies():
+    """Ensure AWM dependencies are available in the container"""
+    import subprocess
+    import sys
+    
+    try:
+        import sentence_transformers
+        logger.info("sentence-transformers already available")
+        return True
+    except ImportError:
+        logger.info("Installing sentence-transformers...")
+        try:
+            # Use the same Python interpreter that's running
+            subprocess.check_call([
+                sys.executable, "-m", "pip", "install", 
+                "sentence-transformers", "torch", "numpy"
+            ])
+            logger.info("Successfully installed sentence-transformers")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to install sentence-transformers: {e}")
+            logger.info("Will use keyword fallback for RAG")
+            return False
+
 def get_config(
     base_container_image: str,
     task_short_name: str,
@@ -140,7 +164,8 @@ def codeact_user_response(state: State) -> str:
 def run_solver(runtime: Runtime, task_name: str, config: OpenHandsConfig, dependencies: List[str],
                save_final_state: bool, state_dir: str,
                save_screenshots: bool, screenshots_dir: str) -> State:
-    
+    if AWM_MEMORY_AVAILABLE or AWM_PROMPT_AVAILABLE:
+        ensure_awm_dependencies()
     # Get task instruction - read from the task container
     task_instruction = ""
     try:
