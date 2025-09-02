@@ -51,7 +51,7 @@ class ProductionRAGSystem:
                 # Test OpenAI connectivity
                 test_response = client.embeddings.create(
                     input="test",
-                    model="ttext-embedding-3-small"
+                    model="text-embedding-3-small"
                 )
                 self.embedding_model = None
                 self.embedding_dim = 1536
